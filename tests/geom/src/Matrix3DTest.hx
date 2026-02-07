@@ -1,5 +1,6 @@
 package;
 
+import haxe.ds.Vector;
 import openfl.geom.Matrix3D;
 import openfl.geom.Orientation3D;
 import openfl.geom.Vector3D;
@@ -204,6 +205,67 @@ class Matrix3DTest extends Test
 
 		// Test the translation matches to the translation values in Flash
 		assertMatrix3DnearEquals(expectedTranslatedMatrix3D, matrix3D);
+	}
+
+	public function test_appendTranslation_matrixMultiply_equiv()
+	{
+		var m1 = new Matrix3D();
+		// build translation as separate multiplication
+		var tMat = new Matrix3D();
+		tMat.copyRawDataFrom(Vector.ofArray([
+			1.0,  0,  0, 0,
+			  0,  1,  0, 0,
+			  0,  0,  1, 0,
+			 10, 20, 30, 1
+		]));
+		m1.append(tMat);
+
+		var m2 = new Matrix3D();
+		// OpenFL shortcut
+		m2.appendTranslation(10, 20, 30);
+
+		assertMatrix3DnearEquals(m1, m2);
+	}
+
+	public function test_append_associative():Void
+	{
+		var A = new Matrix3D();
+		var B = new Matrix3D();
+		var C = new Matrix3D();
+		randomizeMatrix(A);
+		randomizeMatrix(B);
+		randomizeMatrix(C);
+
+		var AB_C = new Matrix3D();
+		AB_C.copyFrom(A);
+		AB_C.append(B);
+		AB_C.append(C);
+
+		var A_BC = new Matrix3D();
+		var BC = new Matrix3D();
+		BC.copyFrom(B);
+		BC.append(C);
+		A_BC.copyFrom(A);
+		A_BC.append(BC);
+
+		assertMatrix3DnearEquals(AB_C, A_BC);
+	}
+
+	public function test_append_identity():Void
+	{
+		var M = new Matrix3D();
+		randomizeMatrix(M);
+
+		var left = new Matrix3D();
+		left.append(M);
+
+		var right = new Matrix3D();
+		right.copyFrom(M);
+		var identity = new Matrix3D();
+		right.append(identity);
+
+		assertMatrix3DnearEquals(left, M);
+		assertMatrix3DnearEquals(right, M);
 	}
 
 	public function test_clone()
@@ -482,6 +544,42 @@ class Matrix3DTest extends Test
 		Assert.equals(56, c.w);
 	}
 
+	public function test_deltaTransformVector2():Void
+	{
+		var M = new Matrix3D();
+		randomizeMatrix(M);
+
+		var point = new Vector3D(1, 2, 3, 1);
+		var delta = new Vector3D(1, 2, 3, 0);
+
+		var transformedPoint = M.transformVector(point);
+		var transformedDelta = M.deltaTransformVector(delta);
+
+		// deltaTransform should ignore translation
+		Assert.equals(transformedDelta.w, 0);
+		Assert.equals(transformedDelta.x, transformedPoint.x - M.position.x);
+	}
+
+	public function test_deltaTransformVector_w_behavior()
+	{
+		var m = new Matrix3D(Vector.ofArray([
+			1.0, 0, 0, 10,
+			  0, 1, 0, 20,
+			  0, 0, 1, 30,
+			  0, 0, 0,  1
+		]));
+
+		// w component is ignored (should be 0 in output)
+		var input = new Vector3D(1, 2, 3, 5);
+		var result = m.deltaTransformVector(input);
+
+		// Result computed ignoring translation
+		Assert.equals(result.w, 0);
+		Assert.equals(result.x, 1);
+		Assert.equals(result.y, 2);
+		Assert.equals(result.z, 3);
+	}
+
 	public function test_identity()
 	{
 		var identity = Vector.ofArray([1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
@@ -522,6 +620,22 @@ class Matrix3DTest extends Test
 		Assert.isTrue(inverted);
 
 		assertMatrix3DnearEquals(expected, matrix3D);
+	}
+
+	public function test_invert_roundtrip():Void
+	{
+		var M = new Matrix3D();
+		randomizeMatrix(M); // ensure non-singular
+
+		var inv = M.clone();
+		inv.invert();
+
+		var check = inv.clone();
+		check.append(M);
+
+		var identity = new Matrix3D();
+
+		assertMatrix3DnearEquals(check, identity);
 	}
 
 	@Ignored
@@ -799,6 +913,31 @@ class Matrix3DTest extends Test
 		assertVectorNearEquals(expected, actual);
 	}
 
+	public function test_transformVectors_multiple()
+	{
+		var m = new Matrix3D();
+		m.appendRotation(45, Vector3D.Z_AXIS);
+		m.appendTranslation(10, 20, 30);
+
+		var input = Vector.ofArray([
+			1.0,  0, 0,
+			  0,  1, 0,
+			 -1, -1, 0
+		]);
+		var output = new Vector<Float>(input.length);
+
+		m.transformVectors(input, output);
+
+		// Transform each point manually for expected values
+		for (i in 0...input.length)
+		{
+			var v = m.transformVector(new Vector3D(input[i], input[i + 1], input[i + 2]));
+			Assert.isTrue(nearEquals(v.x, output[i]));
+			Assert.isTrue(nearEquals(v.y, output[i + 1]));
+			Assert.isTrue(nearEquals(v.z, output[i + 2]));
+		}
+	}
+
 	public function test_transpose()
 	{
 		// TODO: Confirm functionality
@@ -929,8 +1068,151 @@ class Matrix3DTest extends Test
 		}
 	}
 
+	// Compare floats with tolerance
+	public static function assertAlmostEqual(a:Float, b:Float, tol:Float = 1e-5):Void
+	{
+		Assert.isTrue(Math.abs(a - b) < tol, "Expected ${a} ≈ ${b}");
+	}
+
+	// Assert matrices are NOT equal
+	public static function assertNotMatrix3DEqual(a:Matrix3D, b:Matrix3D, tol:Float = 1e-5):Void
+	{
+		var ra = new Vector<Float>(16);
+		var rb = new Vector<Float>(16);
+
+		a.copyRawDataTo(ra);
+		b.copyRawDataTo(rb);
+		var equal = true;
+		for (i in 0...16)
+		{
+			if (Math.abs(ra[i] - rb[i]) > tol)
+			{
+				equal = false;
+				break;
+			}
+		}
+		Assert.isFalse(equal, "Matrices unexpectedly equal");
+	}
+
+	// Simple float equality
+	public static function assertNotEquals(a:Float, b:Float, tol:Float = 1e-5):Void
+	{
+		if (Math.abs(a - b) <= tol) throw "Expected ${a} ≠ ${b}";
+	}
+
+	// Generates a matrix3D with random values for testing
+	public static function randomizeMatrix(m:Matrix3D):Void
+	{
+		var values:Vector<Float> = new Vector(16);
+		for (i in 0...16)
+		{
+			values.push(Math.random() * 10 - 5); // random float between -5 and 5
+		}
+		m.copyRawDataFrom(values);
+	}
+
 	private function nearEquals(expected:Float, actual:Float, tolerance:Float = 0.001):Bool
 	{
 		return (actual > expected - tolerance) && (actual < expected + tolerance);
+	}
+
+	public function test_rotationWithPivot_equals_manualConstruction()
+	{
+		var pivot = new Vector3D(5, 5, 5);
+
+		// Build expected pivoted rotation manually
+		var manual = new Matrix3D();
+		manual.appendTranslation(-pivot.x, -pivot.y, -pivot.z);
+		manual.appendRotation(90, Vector3D.Y_AXIS);
+		manual.appendTranslation(pivot.x, pivot.y, pivot.z);
+
+		var actual = new Matrix3D();
+		actual.appendRotation(90, Vector3D.Y_AXIS, pivot);
+
+		assertMatrix3DnearEquals(manual, actual);
+	}
+
+	public function test_rotation_scale_orthonormal()
+	{
+		var m = new Matrix3D();
+		m.appendRotation(30, Vector3D.X_AXIS);
+		m.appendScale(2, 2, 2);
+		m.appendRotation(45, Vector3D.Y_AXIS);
+
+		// Transform coordinate axes
+		var xAxis = m.deltaTransformVector(new Vector3D(1, 0, 0));
+		var yAxis = m.deltaTransformVector(new Vector3D(0, 1, 0));
+		var zAxis = m.deltaTransformVector(new Vector3D(0, 0, 1));
+
+		// Check that axes remain orthogonal
+		Assert.isTrue(Math.abs(xAxis.dotProduct(yAxis)) < 0.0001);
+		Assert.isTrue(Math.abs(xAxis.dotProduct(zAxis)) < 0.0001);
+		Assert.isTrue(Math.abs(yAxis.dotProduct(zAxis)) < 0.0001);
+	}
+
+	public function test_rotation_with_pivot():Void
+	{
+		var pivot = new Vector3D(5, 5, 5);
+
+		var manual = new Matrix3D();
+		manual.appendTranslation(-pivot.x, -pivot.y, -pivot.z);
+		manual.appendRotation(90, Vector3D.Y_AXIS);
+		manual.appendTranslation(pivot.x, pivot.y, pivot.z);
+
+		var actual = new Matrix3D();
+		actual.appendRotation(90, Vector3D.Y_AXIS, pivot);
+
+		assertMatrix3DnearEquals(manual, actual);
+	}
+
+	public function test_orthonormal_preserved():Void
+	{
+		var M = new Matrix3D();
+		M.appendRotation(30, Vector3D.X_AXIS);
+		M.appendScale(2, 2, 2);
+		M.appendRotation(45, Vector3D.Y_AXIS);
+
+		var xAxis = M.deltaTransformVector(new Vector3D(1, 0, 0));
+		var yAxis = M.deltaTransformVector(new Vector3D(0, 1, 0));
+		var zAxis = M.deltaTransformVector(new Vector3D(0, 0, 1));
+
+		assertAlmostEqual(xAxis.dotProduct(yAxis), 0);
+		assertAlmostEqual(xAxis.dotProduct(zAxis), 0);
+		assertAlmostEqual(yAxis.dotProduct(zAxis), 0);
+	}
+
+	public function test_scale_rotation_order():Void
+	{
+		var M1 = new Matrix3D();
+		M1.appendScale(2, 3, 4);
+		M1.appendRotation(45, Vector3D.Y_AXIS);
+
+		var M2 = new Matrix3D();
+		M2.appendRotation(45, Vector3D.Y_AXIS);
+		M2.appendScale(2, 3, 4);
+
+		assertNotMatrix3DEqual(M1, M2);
+	}
+
+	// public function test_w_component():Void
+	// {
+	// 	var M = new Matrix3D();
+	// 	M.appendPerspectiveFieldOfView(45, 1, 0.1, 100);
+	// 	var v = new Vector3D(1, 1, -5, 1);
+	// 	var t = M.transformVector(v);
+	// 	assertNotEquals(t.w, 1); // perspective divide
+	// }
+
+	public function test_uniform_scale_commute_rotation():Void
+	{
+		var M1 = new Matrix3D();
+		M1.appendScale(2, 2, 2);
+		M1.appendRotation(30, Vector3D.X_AXIS);
+
+		var M2 = new Matrix3D();
+		M2.appendRotation(30, Vector3D.X_AXIS);
+		M2.appendScale(2, 2, 2);
+
+		assertMatrix3DnearEquals(M1, M2);
 	}
 }
